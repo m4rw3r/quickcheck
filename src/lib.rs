@@ -15,7 +15,7 @@ pub use arbitrary::{
     empty_shrinker, single_shrinker,
 };
 pub use rand::Rng;
-pub use tester::{QuickCheck, Testable, TestResult, quickcheck};
+pub use tester::{QuickCheck, Testable, TestResult, quickcheck, quickcheck_};
 
 /// A macro for writing quickcheck tests.
 ///
@@ -44,6 +44,7 @@ macro_rules! quickcheck {
     (@as_items $($i:item)*) => ($($i)*);
     {
         $(
+            $(#[example($example:expr)])*
             fn $fn_name:ident($($arg_name:ident : $arg_ty:ty),*) -> $ret:ty {
                 $($code:tt)*
             }
@@ -57,7 +58,8 @@ macro_rules! quickcheck {
                     fn prop($($arg_name: $arg_ty),*) -> $ret {
                         $($code)*
                     }
-                    $crate::quickcheck(prop as fn($($arg_ty),*) -> $ret);
+                    let v = vec![$($example),*];
+                    $crate::quickcheck_(prop as fn($($arg_ty),*) -> $ret, v);
                 }
             )*
         }

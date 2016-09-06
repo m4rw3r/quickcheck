@@ -210,3 +210,15 @@ fn regression_issue_107_hang() {
     }
     quickcheck(prop as fn(_) -> bool);
 }
+
+#[test]
+#[should_panic]
+fn explicit_data() {
+    // This should receive an empty list every time => it should fail every time
+    fn prop(zero: Vec<u8>) -> bool {
+        assert!(!zero.is_empty());
+
+        true
+    }
+    QuickCheck::new().quickcheck_(prop as fn(Vec<u8>) -> bool, vec![((Vec::new(),), ())]);
+}

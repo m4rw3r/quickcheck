@@ -83,6 +83,19 @@ impl<G: Gen> QuickCheck<G> {
         Ok(ntests)
     }
 
+    pub fn quicktest_explicit<A>(&mut self, f: &mut A, mut c: Vec<A::Arbitrary>) -> Result<usize, TestResult>
+        where A: Testable {
+        let mut ntests: usize = 0;
+        for a in c.drain(..) {
+            match f.run_test(a) {
+                TestResult { status: Pass, .. } => ntests += 1,
+                TestResult { status: Discard, .. } => continue,
+                r @ TestResult { status: Fail, .. } => return Err(r),
+            }
+        }
+        Ok(ntests)
+    }
+
     /// Tests a property and calls `panic!` on failure.
     ///
     /// The `panic!` message will include a (hopefully) minimal witness of
@@ -118,12 +131,29 @@ impl<G: Gen> QuickCheck<G> {
             Err(result) => panic!(result.failed_msg()),
         }
     }
+
+    pub fn quickcheck_<A>(&mut self, mut f: A, c: Vec<A::Arbitrary>) where A: Testable {
+        // Ignore log init failures, implying it has already been done.
+        let _ = ::env_logger::init();
+
+        match self.quicktest_explicit(&mut f, c) {
+            Ok(ntests) => info!("(Passed {} QuickCheck example tests.)", ntests),
+            Err(result) => panic!(result.failed_msg()),
+        }
+
+        match self.quicktest(f) {
+            Ok(ntests) => info!("(Passed {} QuickCheck tests.)", ntests),
+            Err(result) => panic!(result.failed_msg()),
+        }
+    }
 }
 
 /// Convenience function for running QuickCheck.
 ///
 /// This is an alias for `QuickCheck::new().quickcheck(f)`.
 pub fn quickcheck<A: Testable>(f: A) { QuickCheck::new().quickcheck(f) }
+
+pub fn quickcheck_<A: Testable>(f: A, c: Vec<A::Arbitrary>) { QuickCheck::new().quickcheck_(f, c) }
 
 /// Describes the status of a single instance of a test.
 ///
@@ -226,33 +256,63 @@ impl TestResult {
 ///
 /// It's unlikely that you'll have to implement this trait yourself.
 pub trait Testable : Send + 'static {
+    type Arbitrary: Arbitrary;
+
     fn result<G: Gen>(&self, &mut G) -> TestResult;
+    fn run_test(&self, Self::Arbitrary) -> TestResult;
 }
 
 impl Testable for bool {
+    type Arbitrary = ();
+
     fn result<G: Gen>(&self, _: &mut G) -> TestResult {
+        TestResult::from_bool(*self)
+    }
+    fn run_test(&self, _: Self::Arbitrary) -> TestResult {
         TestResult::from_bool(*self)
     }
 }
 
 impl Testable for () {
+    type Arbitrary = ();
+
     fn result<G: Gen>(&self, _: &mut G) -> TestResult {
+        TestResult::passed()
+    }
+    fn run_test(&self, _: Self::Arbitrary) -> TestResult {
         TestResult::passed()
     }
 }
 
 impl Testable for TestResult {
+    type Arbitrary = ();
+
     fn result<G: Gen>(&self, _: &mut G) -> TestResult { self.clone() }
+    fn run_test(&self, _: Self::Arbitrary) -> TestResult { self.clone() }
 }
 
 impl<A, E> Testable for Result<A, E>
         where A: Testable, E: Debug + Send + 'static {
+    type Arbitrary = A::Arbitrary;
+
     fn result<G: Gen>(&self, g: &mut G) -> TestResult {
         match *self {
             Ok(ref r) => r.result(g),
             Err(ref err) => TestResult::error(format!("{:?}", err)),
         }
     }
+    fn run_test(&self, a: Self::Arbitrary) -> TestResult {
+        match *self {
+            Ok(ref r) => r.run_test(a),
+            Err(ref err) => TestResult::error(format!("{:?}", err)),
+        }
+    }
+}
+
+macro_rules! mk_ident_tuple {
+    ()                   => { () };
+    ( $name:ident )      => { ($name,) };
+    ( $($name:ident),* ) => { ($($name,)*) };
 }
 
 macro_rules! testable_fn {
@@ -260,6 +320,8 @@ macro_rules! testable_fn {
 
 impl<T: Testable,
      $($name: Arbitrary + Debug),*> Testable for fn($($name),*) -> T {
+    type Arbitrary = (mk_ident_tuple!($($name),*), T::Arbitrary);
+
     #[allow(non_snake_case)]
     fn result<G_: Gen>(&self, g: &mut G_) -> TestResult {
         fn shrink_failure<T: Testable, G_: Gen, $($name: Arbitrary + Debug),*>(
@@ -299,6 +361,17 @@ impl<T: Testable,
                 shrink_failure(g, self_, a).unwrap_or(r)
             }
         }
+    }
+
+    #[allow(non_snake_case)]
+    fn run_test(&self, a: Self::Arbitrary) -> TestResult {
+        let self_ = *self;
+        let ( $($name,)* ) = a.0.clone();
+        let mut r = safe(move || {self_($($name),*)}).run_test(a.1);
+        let ( $($name,)* ) = a.0.clone();
+        r.arguments = vec![$(format!("{:?}", $name),)*];
+
+        r
     }
 }}}
 
